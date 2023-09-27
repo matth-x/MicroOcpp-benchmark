@@ -3,6 +3,7 @@
 cmake_minimum_required(VERSION 3.5)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(mo_example)
+project(mo_benchmark)
 
 idf_build_set_property(COMPILE_OPTIONS -DMOCPP_TRAFFIC_OUT APPEND)
+idf_build_set_property(COMPILE_OPTIONS -DMOCPP_FILENAME_PREFIX="/mo_store/" APPEND)

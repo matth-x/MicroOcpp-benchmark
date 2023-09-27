@@ -16,10 +16,15 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
+#include "esp_timer.h" //ESP high-precision timer
+
 /* MicroOcpp includes */
 #include <mongoose.h>
 #include <MicroOcpp_c.h> //C-facade of MicroOcpp
 #include <MicroOcppMongooseClient_c.h> //WebSocket integration for ESP-IDF
+#include "cxx_intf.h" //extra MicroOcpp functions which are not available in the C-API
+
+#define MICROS_PER_SEC 1000000
 
 /* The examples use WiFi configuration that you can set via project configuration menu
 
@@ -135,6 +140,23 @@ void wifi_init_sta(void)
     vEventGroupDelete(s_wifi_event_group);
 }
 
+bool ocpp_sim_plugged = false;
+bool ocpp_plugged_input() {
+    return ocpp_sim_plugged;
+}
+
+int ocpp_sim_e = 0;
+int ocpp_energy_input() {
+    return ocpp_sim_e;
+}
+
+float ocpp_sim_max_p = 0.f;
+void ocpp_smartcharging_output(float p_max, float e_max, int n_phases) {
+    ocpp_sim_max_p = p_max;
+    (void)e_max;
+    (void)n_phases;
+}
+
 void app_main(void)
 {
     //Initialize NVS
@@ -145,8 +167,12 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
-    wifi_init_sta();
+    OCPP_Connection *loopback = ocpp_loopback_make(); //this will be used for the automated test runs
+
+    /*
+     * Duration of cold boot
+     */
+    int64_t tick_init_begin = esp_timer_get_time();
 
     /* Initialize Mongoose (necessary for MicroOcpp)*/
     struct mg_mgr mgr;        // Event manager
@@ -154,19 +180,137 @@ void app_main(void)
     mg_log_set(MG_LL_DEBUG);  // Set log level
 
     /* Initialize MicroOcpp */
-    struct OCPP_FilesystemOpt fsopt = { .use = true, .mount = true, .formatFsOnFail = true};
+    struct OCPP_FilesystemOpt fsopt = { .use = false, .mount = false, .formatFsOnFail = true};
 
     OCPP_Connection *osock = ocpp_makeConnection(&mgr,
-            EXAMPLE_MOCPP_OCPP_BACKEND, 
-            EXAMPLE_MOCPP_CHARGEBOXID, 
-            EXAMPLE_MOCPP_AUTHORIZATIONKEY, "", fsopt);
-    ocpp_initialize(osock, "ESP-IDF charger", "Your brand name here", fsopt);
+            NULL, NULL, NULL, NULL, fsopt); //this is created to measure a realistic initialization phase
+    ocpp_initialize(loopback, "ESP-IDF charger", "Your brand name here", fsopt);
+
+    ocpp_setConnectorPluggedInput(ocpp_plugged_input);
+    ocpp_setEnergyMeterInput(ocpp_energy_input);
+    ocpp_setSmartChargingOutput(ocpp_smartcharging_output);
+
+    int64_t tick_init = esp_timer_get_time() - tick_init_begin;
+
+    vTaskDelay(1);
+
+    /*
+     * The first loop runs executes a few special initialization routines. Take their maximum execution time
+     */
+    int64_t tick_loop_max = 0;
+
+    for (unsigned int i = 0; i < 128; i++) {
+        int64_t tick_loop_begin = esp_timer_get_time();
+        ocpp_loop();
+        int64_t tick_loop_d = esp_timer_get_time() - tick_loop_begin;
+        if (tick_loop_d > tick_loop_max) {
+            tick_loop_max = tick_loop_d;
+        }
+    }
+
+    vTaskDelay(1);
+
+    /*
+     * Average idle core usage
+     */
+    int64_t tick_avg_begin = esp_timer_get_time();
+    const int64_t N_AVG = 10000;
+
+    for (unsigned int i = 0; i < N_AVG; i++) {
+        ocpp_loop();
+    }
+
+    int64_t tick_avg = (esp_timer_get_time() - tick_avg_begin) / N_AVG;
+
+    vTaskDelay(1);
+
+    /*
+     * GetDiagnostics execution time (large payload, but not SPI-bus-bound)
+     */
+    int64_t tick_gdiag_begin = esp_timer_get_time();
+    const int64_t N_GDIAG = 10; //no of GDiag messages to be sent
+    const int64_t N_GDIAG_IDLE = 10; //no of idle loop calls between each GDiag
+    const int64_t DELAY_GDIAG_MICROS = 100 * 1000; //delays
+
+    for (unsigned int i = 0; i < N_GDIAG; i++) {
+        ocpp_send_GetDiagnostics(loopback); //processed immediately
+        ocpp_loopback_set_connected(loopback, false); //response is created but won't be sent
+        
+        for (unsigned int i = 0; i < N_GDIAG_IDLE; i++) {
+            ocpp_loop();
+        }
+
+        ocpp_loopback_set_connected(loopback, true); //connect again
+
+        vTaskDelay(1);
+    }
+
+    int64_t tick_gdiag = (esp_timer_get_time() - tick_gdiag_begin - (N_GDIAG_IDLE * tick_avg)) / N_GDIAG;
+
+    /*
+     * Transaction cycle execution time (heavily SPI-bus-bound)
+     */
+    int64_t tick_tx_begin = esp_timer_get_time();
+    const int64_t N_TX = 10;
+    const int64_t N_TX_IDLE = 100;
+
+    ocpp_sim_plugged = true; //connector is plugged all the time
+
+    for (unsigned int i = 0; i < N_TX; i++) {
+        ocpp_beginTransaction_authorized("mIdTag", NULL);
+
+        for (unsigned int i = 0; i < N_TX_IDLE; i++) {
+            ocpp_loop();
+        }
+
+        ocpp_endTransaction("mIdTag", NULL);
+
+        for (unsigned int i = 0; i < N_TX_IDLE; i++) {
+            ocpp_loop();
+        }
+
+        vTaskDelay(1);
+    }
+
+    int64_t tick_tx = (
+                esp_timer_get_time() - tick_tx_begin - //total execution time
+                (2 * N_TX_IDLE * tick_avg) //substract number of loop calls per tx cycle times average loop time
+            ) / N_TX; //average tx cycle time without idle loop time
+
+    /*
+     * Duration of deinitialization
+     */
+    int64_t tick_deinit_begin = esp_timer_get_time();
+    ocpp_deinitialize();
+    int64_t tick_deinit = esp_timer_get_time() - tick_deinit_begin;
+
+    printf("\n\nBenchark results ===\n"
+            "initalization=%" PRId64 "\n" 
+            "loop_init_max=%" PRId64 "\n"
+            "loop_idle=%" PRId64 "\n"
+            "GetDiagnostics=%" PRId64 "\n"
+            "transaction_cycle=%" PRId64 "\n"
+            "deinitialization=%" PRId64 "\n"
+            "\n",
+            tick_init,
+            tick_loop_max,
+            tick_avg,
+            tick_gdiag,
+            tick_tx,
+            tick_deinit);
+
+    while (1) {
+        vTaskDelay(1);
+    }
 
     /* Enter infinite loop */
     while (1) {
         mg_mgr_poll(&mgr, 10);
         ocpp_loop();
     }
+
+    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
+    wifi_init_sta();
     
     /* Deallocate ressources */
     ocpp_deinitialize();
