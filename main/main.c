@@ -16,7 +16,8 @@
 #include "lwip/err.h"
 #include "lwip/sys.h"
 
-#include "esp_timer.h" //ESP high-precision timer
+#include "esp_timer.h" //high-precision timer
+#include "multi_heap.h" //heap information
 
 /* MicroOcpp includes */
 #include <mongoose.h>
@@ -169,15 +170,17 @@ void app_main(void)
 
     OCPP_Connection *loopback = ocpp_loopback_make(); //this will be used for the automated test runs
 
-    /*
-     * Duration of cold boot
-     */
-    int64_t tick_init_begin = esp_timer_get_time();
-
     /* Initialize Mongoose (necessary for MicroOcpp)*/
     struct mg_mgr mgr;        // Event manager
     mg_mgr_init(&mgr);        // Initialise event manager
     mg_log_set(MG_LL_DEBUG);  // Set log level
+
+    /*
+     * Duration of cold boot
+     */
+    multi_heap_info_t heap_init_begin;
+    heap_caps_get_info(&heap_init_begin, MALLOC_CAP_DEFAULT);
+    int64_t tick_init_begin = esp_timer_get_time();
 
     /* Initialize MicroOcpp */
     struct OCPP_FilesystemOpt fsopt = { .use = false, .mount = false, .formatFsOnFail = true};
@@ -191,12 +194,16 @@ void app_main(void)
     ocpp_setSmartChargingOutput(ocpp_smartcharging_output);
 
     int64_t tick_init = esp_timer_get_time() - tick_init_begin;
+    multi_heap_info_t heap_init_end;
+    heap_caps_get_info(&heap_init_end, MALLOC_CAP_DEFAULT);
 
     vTaskDelay(1);
 
     /*
      * The first loop runs executes a few special initialization routines. Take their maximum execution time
      */
+    multi_heap_info_t heap_loop_begin;
+    heap_caps_get_info(&heap_loop_begin, MALLOC_CAP_DEFAULT);
     int64_t tick_loop_max = 0;
 
     for (unsigned int i = 0; i < 128; i++) {
@@ -207,6 +214,9 @@ void app_main(void)
             tick_loop_max = tick_loop_d;
         }
     }
+    
+    multi_heap_info_t heap_loop_end;
+    heap_caps_get_info(&heap_loop_end, MALLOC_CAP_DEFAULT);
 
     vTaskDelay(1);
 
@@ -227,14 +237,22 @@ void app_main(void)
     /*
      * GetDiagnostics execution time (large payload, but not SPI-bus-bound)
      */
+    multi_heap_info_t heap_gdiag_begin;
+    heap_caps_get_info(&heap_gdiag_begin, MALLOC_CAP_DEFAULT);
+    multi_heap_info_t heap_gdiag_end;
+    bool heap_gdiag_end_defined = false;
     int64_t tick_gdiag_begin = esp_timer_get_time();
     const int64_t N_GDIAG = 10; //no of GDiag messages to be sent
     const int64_t N_GDIAG_IDLE = 10; //no of idle loop calls between each GDiag
-    const int64_t DELAY_GDIAG_MICROS = 100 * 1000; //delays
 
     for (unsigned int i = 0; i < N_GDIAG; i++) {
         ocpp_send_GetDiagnostics(loopback); //processed immediately
         ocpp_loopback_set_connected(loopback, false); //response is created but won't be sent
+        
+        if (!heap_gdiag_end_defined) {
+            heap_gdiag_end_defined = true;
+            heap_caps_get_info(&heap_gdiag_end, MALLOC_CAP_DEFAULT);
+        }
         
         for (unsigned int i = 0; i < N_GDIAG_IDLE; i++) {
             ocpp_loop();
@@ -242,14 +260,24 @@ void app_main(void)
 
         ocpp_loopback_set_connected(loopback, true); //connect again
 
-        vTaskDelay(1);
+//        vTaskDelay(1);
     }
 
-    int64_t tick_gdiag = (esp_timer_get_time() - tick_gdiag_begin - (N_GDIAG_IDLE * tick_avg)) / N_GDIAG;
+    int64_t tick_gdiag = (
+            esp_timer_get_time() - tick_gdiag_begin -
+//            N_GDIAG * MICROS_PER_SEC / configTICK_RATE_HZ -
+            (N_GDIAG * N_GDIAG_IDLE * tick_avg)
+        ) / N_GDIAG;
+    
+    vTaskDelay(1);
 
     /*
      * Transaction cycle execution time (heavily SPI-bus-bound)
      */
+    multi_heap_info_t heap_tx_begin;
+    heap_caps_get_info(&heap_tx_begin, MALLOC_CAP_DEFAULT);
+    multi_heap_info_t heap_tx_end;
+    bool heap_tx_end_defined = false;
     int64_t tick_tx_begin = esp_timer_get_time();
     const int64_t N_TX = 10;
     const int64_t N_TX_IDLE = 100;
@@ -257,10 +285,15 @@ void app_main(void)
     ocpp_sim_plugged = true; //connector is plugged all the time
 
     for (unsigned int i = 0; i < N_TX; i++) {
-        ocpp_beginTransaction_authorized("mIdTag", NULL);
+        ocpp_beginTransaction("mIdTag");
 
         for (unsigned int i = 0; i < N_TX_IDLE; i++) {
             ocpp_loop();
+        }
+
+        if (!heap_tx_end_defined) {
+            heap_tx_end_defined = true;
+            heap_caps_get_info(&heap_tx_end, MALLOC_CAP_DEFAULT);
         }
 
         ocpp_endTransaction("mIdTag", NULL);
@@ -269,22 +302,32 @@ void app_main(void)
             ocpp_loop();
         }
 
-        vTaskDelay(1);
+//        vTaskDelay(1);
     }
 
     int64_t tick_tx = (
                 esp_timer_get_time() - tick_tx_begin - //total execution time
-                (2 * N_TX_IDLE * tick_avg) //substract number of loop calls per tx cycle times average loop time
+//                N_TX * MICROS_PER_SEC / configTICK_RATE_HZ -
+                (N_TX * 2 * N_TX_IDLE * tick_avg) //substract number of loop calls per tx cycle times average loop time
             ) / N_TX; //average tx cycle time without idle loop time
+
+    vTaskDelay(1);
 
     /*
      * Duration of deinitialization
      */
+    multi_heap_info_t heap_deinit_begin;
+    heap_caps_get_info(&heap_deinit_begin, MALLOC_CAP_DEFAULT);
     int64_t tick_deinit_begin = esp_timer_get_time();
     ocpp_deinitialize();
     int64_t tick_deinit = esp_timer_get_time() - tick_deinit_begin;
+    multi_heap_info_t heap_deinit_end;
+    heap_caps_get_info(&heap_deinit_end, MALLOC_CAP_DEFAULT);
+
+    vTaskDelay(1);
 
     printf("\n\nBenchark results ===\n"
+            "ececution times in microseconds:\n"
             "initalization=%" PRId64 "\n" 
             "loop_init_max=%" PRId64 "\n"
             "loop_idle=%" PRId64 "\n"
@@ -298,6 +341,26 @@ void app_main(void)
             tick_gdiag,
             tick_tx,
             tick_deinit);
+    
+    printf("heap occupation in Bytes:\n"
+            "occupied before initalization=%d\n"
+            "delta initialized lib=%d\n"
+            "delta queued GetDiagnostics=%d\n"
+            "delta transaction=%d\n"
+            "occupied after tx=%d\n"
+            "delta largest free block=%d\n"
+            "occupied after deinitialization=%d\n"
+            "   slack=%d\n"
+            "\n",
+            (int) heap_init_begin.total_allocated_bytes,
+            (int) heap_loop_end.total_allocated_bytes - (int) heap_init_begin.total_allocated_bytes,
+            (int) heap_gdiag_end.total_allocated_bytes - (int) heap_gdiag_begin.total_allocated_bytes,
+            (int) heap_tx_end.total_allocated_bytes - (int) heap_tx_begin.total_allocated_bytes,
+            (int) heap_deinit_begin.total_allocated_bytes,
+            (int) heap_init_begin.largest_free_block - (int) heap_deinit_begin.largest_free_block,
+            (int) heap_deinit_end.total_allocated_bytes,
+            (int) heap_deinit_end.total_allocated_bytes - (int) heap_init_begin.total_allocated_bytes
+            );
 
     while (1) {
         vTaskDelay(1);
