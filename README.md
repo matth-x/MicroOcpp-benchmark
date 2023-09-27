@@ -13,6 +13,12 @@ General setup:
 - although the Mongoose WebSocket adapter is initialized, all traffic is routed though a loopback connection
 - no filesystem access
 
+System:
+
+- ESP32-WROOM-32
+- CPU frequency: 160 MHz
+- ESP-IDF v4.4.1
+
 ### Results
 
 #### Flash size
