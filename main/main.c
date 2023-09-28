@@ -200,21 +200,17 @@ void app_main(void)
     vTaskDelay(1);
 
     /*
-     * The first loop runs executes a few special initialization routines. Take their maximum execution time
+     * The first loop runs executes a few special initialization routines. Take their total execution time
      */
     multi_heap_info_t heap_loop_begin;
     heap_caps_get_info(&heap_loop_begin, MALLOC_CAP_DEFAULT);
-    int64_t tick_loop_max = 0;
+    int64_t tick_init_async_begin = esp_timer_get_time();
 
-    for (unsigned int i = 0; i < 128; i++) {
-        int64_t tick_loop_begin = esp_timer_get_time();
+    for (unsigned int i = 0; i < 10; i++) {
         ocpp_loop();
-        int64_t tick_loop_d = esp_timer_get_time() - tick_loop_begin;
-        if (tick_loop_d > tick_loop_max) {
-            tick_loop_max = tick_loop_d;
-        }
     }
     
+    int64_t tick_init_async_max = esp_timer_get_time() - tick_init_async_begin;
     multi_heap_info_t heap_loop_end;
     heap_caps_get_info(&heap_loop_end, MALLOC_CAP_DEFAULT);
 
@@ -330,14 +326,14 @@ void app_main(void)
     printf("\n\nBenchark results ===\n"
             "ececution times in microseconds:\n"
             "initalization=%" PRId64 "\n" 
-            "loop_init_max=%" PRId64 "\n"
+            "initalization_async=%" PRId64 "\n"
             "loop_idle=%" PRId64 "\n"
             "GetDiagnostics=%" PRId64 "\n"
             "transaction_cycle=%" PRId64 "\n"
             "deinitialization=%" PRId64 "\n"
             "\n",
             tick_init,
-            tick_loop_max,
+            tick_init_async_max,
             tick_avg,
             tick_gdiag,
             tick_tx,

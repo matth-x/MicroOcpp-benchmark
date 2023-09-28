@@ -43,24 +43,24 @@ Total flash usage as printed by `idf.py size-components`:
 
 | Application part | Execution time (microseconds) |
 | --- | ---: |
-| Library initialization | 10,929 |
-| loop() call maximum | 2,476 |
-| loop() call average | 42 |
-| Execute GetDiagnostics | 5,558 |
-| Authorize, start and stop transaction | 14,615 |
-| Library deinitialization | 1,631 |
+| Initialization (blocking part) | 10,694 |
+| Initialization (parallel part) | 10,188 |
+| loop() call average | 54 |
+| Execute GetDiagnostics | 5,364 |
+| Authorize, start and stop transaction | 14,212 |
+| Library deinitialization | 1,665 |
 
 #### Raw output
 
 ```
 Benchark results ===
 ececution times in microseconds:
-initalization=10929
-loop_init_max=2476
-loop_idle=42
-GetDiagnostics=5558
-transaction_cycle=14615
-deinitialization=1631
+initalization=10694
+initalization_async=10188
+loop_idle=54
+GetDiagnostics=5364
+transaction_cycle=14212
+deinitialization=1665
 
 heap occupation in Bytes:
 library idle=12308
