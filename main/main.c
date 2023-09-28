@@ -320,6 +320,7 @@ void app_main(void)
     heap_caps_get_info(&heap_deinit_begin, MALLOC_CAP_DEFAULT);
     int64_t tick_deinit_begin = esp_timer_get_time();
     ocpp_deinitialize();
+    ocpp_deinitConnection(osock);
     int64_t tick_deinit = esp_timer_get_time() - tick_deinit_begin;
     multi_heap_info_t heap_deinit_end;
     heap_caps_get_info(&heap_deinit_end, MALLOC_CAP_DEFAULT);
@@ -343,21 +344,23 @@ void app_main(void)
             tick_deinit);
     
     printf("heap occupation in Bytes:\n"
-            "occupied before initalization=%d\n"
-            "delta initialized lib=%d\n"
-            "delta queued GetDiagnostics=%d\n"
-            "delta transaction=%d\n"
-            "occupied after tx=%d\n"
+            "library idle=%d\n"
+            "queued GetDiagnostics=%d\n"
+            "running transaction=%d\n"
+            "library idle after tx=%d\n"
+            "maximum heap usage=%d\n"
             "delta largest free block=%d\n"
-            "occupied after deinitialization=%d\n"
+            "ESP base before initalization=%d\n"
+            "ESP base after deinitialization=%d\n"
             "   slack=%d\n"
             "\n",
-            (int) heap_init_begin.total_allocated_bytes,
             (int) heap_loop_end.total_allocated_bytes - (int) heap_init_begin.total_allocated_bytes,
             (int) heap_gdiag_end.total_allocated_bytes - (int) heap_gdiag_begin.total_allocated_bytes,
             (int) heap_tx_end.total_allocated_bytes - (int) heap_tx_begin.total_allocated_bytes,
-            (int) heap_deinit_begin.total_allocated_bytes,
+            (int) heap_deinit_begin.total_allocated_bytes - (int) heap_init_begin.total_allocated_bytes,
+            (int) heap_init_begin.minimum_free_bytes - (int) heap_deinit_end.minimum_free_bytes,
             (int) heap_init_begin.largest_free_block - (int) heap_deinit_begin.largest_free_block,
+            (int) heap_init_begin.total_allocated_bytes,
             (int) heap_deinit_end.total_allocated_bytes,
             (int) heap_deinit_end.total_allocated_bytes - (int) heap_init_begin.total_allocated_bytes
             );

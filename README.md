@@ -27,8 +27,8 @@ Total flash usage as printed by `idf.py size-components`:
 
 | Archive file | Binary size (B) |
 | --- | ---: |
-| libMicroOcpp.a | 116,970 |
-| libMicroOcppMongoose.a | 2,973 |
+| libMicroOcpp.a | 118,181 |
+| libMicroOcppMongoose.a | 2,989 |
 
 #### Heap usage
 
@@ -37,15 +37,39 @@ Total flash usage as printed by `idf.py size-components`:
 | Idle library | 12,308 |
 | Queued GetDiagnostics | 172 |
 | Running transaction | 268 |
-
+| Peak usage | 21,916 |
 
 #### Execution time
 
 | Application part | Execution time (microseconds) |
 | --- | ---: |
-| Library initialization | 10,715 |
-| loop() call maximum | 2,412 |
-| loop() call average | 30 |
-| Execute GetDiagnostics | 5,480 |
-| Authorize, start and stop transaction | 14,452 |
-| Library deinitialization | 1,541 |
+| Library initialization | 10,929 |
+| loop() call maximum | 2,476 |
+| loop() call average | 42 |
+| Execute GetDiagnostics | 5,558 |
+| Authorize, start and stop transaction | 14,615 |
+| Library deinitialization | 1,631 |
+
+#### Raw output
+
+```
+Benchark results ===
+ececution times in microseconds:
+initalization=10929
+loop_init_max=2476
+loop_idle=42
+GetDiagnostics=5558
+transaction_cycle=14615
+deinitialization=1631
+
+heap occupation in Bytes:
+library idle=12308
+queued GetDiagnostics=172
+running transaction=268
+library idle after tx=12576
+maximum heap usage=21916
+delta largest free block=12288
+ESP base before initalization=24964
+ESP base after deinitialization=25108
+   slack=144
+```
